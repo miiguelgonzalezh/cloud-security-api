@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ client.name }} · {{ report.title }} · {{ report.generated_at_human }}</title>
+{# |safe: el CSS es un archivo propio del proyecto, no entrada de la API. Sin
+   esto el autoescape convierte las comillas en &#34; y rompe selectores como
+   details[open] o content: "+ ". #}
+<style>{{ stylesheet | safe }}</style>
+</head>
+<body>
+
+{# Mapa plano id-de-grafica -> especificacion, que consume el JS. #}
+{% set chart_specs = {} %}
+{% for section in sections %}
+{% for card in section.data.cards %}
+{% set _ = chart_specs.update({card.id: card}) %}
+{% endfor %}
+{% endfor %}
+
+<div class="wrap">
+
+  <div class="head">
+    <div>
+      <p class="client">{{ client.name }}</p>
+      <h1>{{ report.title }}</h1>
+      <ul class="meta">
+        <li>Generado: <b>{{ report.generated_at_human }}</b></li>
+        <li>Periodo: <b>{{ report.period_label }}</b></li>
+        <li>Nube: <b>{{ report.cloud }}</b></li>
+      </ul>
+    </div>
+  </div>
+
+  {% if failures %}
+  <div class="notice notice--error" role="status">
+    <strong>Datos incompletos.</strong> {{ failures | length }} de {{ diagnostics | length }}
+    consulta(s) no se pudieron completar; las secciones afectadas se marcan abajo.
+    <ul>
+      {% for failure in failures %}
+      <li><b>{{ failure.label }}</b>: {{ failure.error }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  {% for section in sections %}
+  {% set data = section.data %}
+  <div class="card section" id="{{ section.id }}">
+    <h2>{{ section.title }}</h2>
+    <p class="sub">{{ section.description }}</p>
+
+    {% if data.error %}
+    <div class="notice notice--error">
+      <strong>Seccion no disponible.</strong> {{ data.error }}
+    </div>
+    {% endif %}
+
+    {% for note in data.notes %}
+    <div class="notice">{{ note }}</div>
+    {% endfor %}
+
+    {% if data.available %}
+
+    {% if data.stats %}
+    <div class="stats">
+      {% for stat in data.stats %}
+      <div class="stat">
+        <div class="label">
+          {% if stat.get('tone') %}<i class="dot dot--{{ stat.get('tone') }}"></i>{% endif %}
+          {{ stat.label }}
+        </div>
+        <div class="value">{{ stat.value | miles }}</div>
+        <div class="caption">{{ stat.caption }}</div>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    <div class="charts">
+      {% for card in data.cards %}
+      {% set wide = card.type != 'doughnut' and card.labels | length > 6 %}
+      {% set height = 240 if card.type == 'doughnut' else [150, 52 + 30 * (card.labels | length)] | max %}
+      <div class="chart-cell {% if wide %}chart-cell--wide{% endif %}">
+        <h3>{{ card.title }}</h3>
+        <p class="sub">{{ card.subtitle }}</p>
+
+        <div class="chart-box" style="height: {{ height }}px">
+          <canvas
+            id="canvas-{{ card.id }}"
+            data-card="{{ card.id }}"
+            role="img"
+            aria-label="{{ card.title }}. Los valores exactos estan en la tabla de datos que sigue."></canvas>
+        </div>
+
+        <details class="table-twin">
+          <summary>Tabla de datos ({{ card.rows | length }} filas)</summary>
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  {% for col in card.columns %}
+                  <th {% if col.get('numeric') %}class="num"{% endif %}>{{ col.label }}</th>
+                  {% endfor %}
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in card.rows %}
+                <tr>
+                  {% for col in card.columns %}
+                  <td {% if col.get('numeric') %}class="num"{% endif %}>{{ row[col.key] | miles }}{{ col.get('suffix', '') }}</td>
+                  {% endfor %}
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </details>
+      </div>
+      {% endfor %}
+    </div>
+
+    {% elif not data.error %}
+    <div class="notice">Sin datos para el filtro aplicado en este periodo.</div>
+    {% endif %}
+  </div>
+  {% endfor %}
+
+  <details class="diagnostics">
+    <summary>Diagnostico de la ejecucion</summary>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Dashboard</th>
+            <th>Estado</th>
+            <th class="num">Registros</th>
+            <th class="num">Paginas</th>
+            <th class="num">Total API</th>
+            <th class="num">Segundos</th>
+            <th>Detalle</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for diag in diagnostics %}
+          <tr>
+            <td>{{ diag.label }}</td>
+            <td>{{ 'OK' if diag.ok else 'ERROR' }}</td>
+            <td class="num">{{ diag.records | miles }}</td>
+            <td class="num">{{ diag.pages }}</td>
+            <td class="num">{{ diag.total_reported if diag.total_reported is not none else '—' }}</td>
+            <td class="num">{{ diag.elapsed_seconds }}</td>
+            <td>{{ diag.error if diag.error else ('truncado' if diag.truncated else '—') }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </details>
+
+  <footer>
+    Generado automaticamente desde la API de CrowdStrike Falcon · Reporte {{ report.frequency_label | lower }}<br>
+    Fuente: Falcon Cloud Security · {{ report.generated_at }}
+  </footer>
+
+</div>
+
+<script id="chart-specs" type="application/json">{{ chart_specs | tojson }}</script>
+<script src="{{ chartjs_url }}" defer></script>
+<script>
+(function () {
+  "use strict";
+
+  var SPECS = JSON.parse(document.getElementById("chart-specs").textContent || "{}");
+  var fmt = new Intl.NumberFormat("es-MX");
+
+  // Las claves de color que emiten los processors se resuelven contra las
+  // variables CSS: la paleta se cambia en style.css, no aqui.
+  var COLOR_VARS = {
+    "series-1": "--series-1",
+    "series-2": "--series-2",
+    "series-3": "--series-3",
+    "neutral": "--neutral",
+    "sev-critical": "--sev-critical",
+    "sev-high": "--sev-high",
+    "sev-medium": "--sev-medium",
+    "sev-info": "--sev-info"
+  };
+
+  var css = getComputedStyle(document.documentElement);
+  function token(name) { return css.getPropertyValue(name).trim(); }
+  function color(key) { return token(COLOR_VARS[key] || "--series-1"); }
+
+  var T = {
+    surface: token("--surface-1"),
+    ink: token("--ink"),
+    navy: token("--navy"),
+    muted: token("--muted"),
+    grid: token("--grid"),
+    axis: token("--axis")
+  };
+
+  // Etiqueta el valor al final de cada barra, como en los dashboards de
+  // avance. Solo en graficas de pocas barras: un numero sobre cada punto de
+  // una serie larga no se lee.
+  var barValueLabels = {
+    id: "barValueLabels",
+    afterDatasetsDraw: function (chart, _args, opts) {
+      if (!opts || !opts.enabled) { return; }
+      var ctx = chart.ctx;
+      var meta = chart.getDatasetMeta(0);
+      ctx.save();
+      ctx.font = "700 11px " + Chart.defaults.font.family;
+      ctx.fillStyle = T.navy;
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      meta.data.forEach(function (bar, i) {
+        var value = chart.data.datasets[0].data[i];
+        ctx.fillText(fmt.format(value), bar.x + 8, bar.y);
+      });
+      ctx.restore();
+    }
+  };
+
+  function barConfig(card) {
+    var labelled = card.labels.length <= 6;
+    return {
+      type: "bar",
+      data: {
+        labels: card.labels,
+        datasets: [{
+          label: card.value_label,
+          data: card.values,
+          backgroundColor: card.colors.map(color),
+          borderWidth: 0,
+          // Extremo redondeado, base anclada a la linea cero.
+          borderRadius: 3,
+          borderSkipped: "start",
+          maxBarThickness: 24
+        }]
+      },
+      options: {
+        indexAxis: "y",
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: { duration: 350 },
+        // Espacio a la derecha para la etiqueta de valor.
+        layout: { padding: { right: labelled ? 46 : 10 } },
+        plugins: {
+          legend: { display: false },
+          barValueLabels: { enabled: labelled },
+          tooltip: {
+            callbacks: {
+              title: function (items) {
+                var i = items[0].dataIndex;
+                return (card.tooltips && card.tooltips[i]) || items[0].label;
+              },
+              label: function (item) {
+                return card.value_label + ": " + fmt.format(item.parsed.x);
+              }
+            }
+          }
+        },
+        scales: {
+          x: {
+            beginAtZero: true,
+            grid: { color: T.grid, drawTicks: false },
+            border: { display: false },
+            ticks: {
+              color: T.muted,
+              precision: 0,
+              font: { size: 11 },
+              callback: function (value) { return fmt.format(value); }
+            },
+            title: { display: true, text: card.value_label, color: T.muted, font: { size: 11 } }
+          },
+          y: {
+            grid: { display: false },
+            border: { color: T.axis },
+            ticks: { color: T.ink, autoSkip: false, font: { size: 12 } }
+          }
+        }
+      }
+    };
+  }
+
+  function doughnutConfig(card) {
+    var percents = card.percents || [];
+    return {
+      type: "doughnut",
+      data: {
+        labels: card.labels,
+        datasets: [{
+          data: card.values,
+          backgroundColor: card.colors.map(color),
+          // El "borde" es del color de la tarjeta: separa los segmentos con un
+          // hueco de 2px en vez de dibujarles un contorno.
+          borderColor: T.surface,
+          borderWidth: 2,
+          hoverOffset: 4
+        }]
+      },
+      options: {
+        cutout: "60%",
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: { duration: 350 },
+        plugins: {
+          legend: {
+            position: "right",
+            labels: {
+              color: T.ink,
+              usePointStyle: true,
+              pointStyle: "rect",
+              boxWidth: 10,
+              boxHeight: 10,
+              padding: 11,
+              font: { size: 12 },
+              // Valor y porcentaje en la leyenda: identidad y magnitud sin
+              // depender del color ni del tooltip.
+              generateLabels: function (chart) {
+                var colors = chart.data.datasets[0].backgroundColor;
+                var values = chart.data.datasets[0].data;
+                return chart.data.labels.map(function (label, i) {
+                  var pct = percents[i] === undefined ? "" : " · " + percents[i] + "%";
+                  return {
+                    text: label + "  " + fmt.format(values[i]) + pct,
+                    fillStyle: colors[i],
+                    strokeStyle: colors[i],
+                    lineWidth: 0,
+                    fontColor: T.ink,
+                    index: i
+                  };
+                });
+              }
+            }
+          },
+          tooltip: {
+            callbacks: {
+              label: function (item) {
+                var pct = percents[item.dataIndex];
+                var suffix = pct === undefined ? "" : " (" + pct + "%)";
+                return item.label + ": " + fmt.format(item.parsed) + suffix;
+              }
+            }
+          }
+        }
+      }
+    };
+  }
+
+  function render() {
+    Chart.defaults.font.family = "'Segoe UI', Arial, sans-serif";
+    Chart.defaults.color = T.muted;
+    Chart.register(barValueLabels);
+
+    Array.prototype.forEach.call(document.querySelectorAll("canvas[data-card]"), function (canvas) {
+      var card = SPECS[canvas.getAttribute("data-card")];
+      if (!card) { return; }
+      new Chart(canvas, card.type === "doughnut" ? doughnutConfig(card) : barConfig(card));
+    });
+  }
+
+  // Chart.js llega con defer: el primer intento util es DOMContentLoaded.
+  // "load" queda como red de seguridad si el CDN tardo mas de lo normal.
+  var rendered = false;
+  function renderOnce() {
+    if (rendered || typeof Chart === "undefined") { return; }
+    rendered = true;
+    render();
+  }
+  window.addEventListener("DOMContentLoaded", renderOnce);
+  window.addEventListener("load", renderOnce);
+})();
+</script>
+</body>
+</html>

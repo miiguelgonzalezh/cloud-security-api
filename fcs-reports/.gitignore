@@ -1,6 +1,15 @@
+# Secretos locales (el .gitignore raiz tambien los cubre)
 .env
+.env.*
+!.env.example
+
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
 .venv/
-output/reports/*.html
+.pytest_cache/
+
+# Salidas generadas
 output/raw/
+output/reports/*
+!output/reports/.gitkeep

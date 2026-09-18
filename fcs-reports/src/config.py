@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import re
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Tuple
@@ -63,8 +64,14 @@ def _env_bool(name: str, default: bool) -> bool:
 
 
 def slugify(value: str) -> str:
-    """Normaliza el nombre del cliente para usarlo en nombres de archivo."""
-    slug = re.sub(r"[^a-z0-9]+", "-", value.strip().lower()).strip("-")
+    """Normaliza el nombre del cliente para usarlo en nombres de archivo.
+
+    Translitera acentos y enies antes de filtrar, para que "Ñoño de México"
+    quede como "nono-de-mexico" y no como "o-o-de-m-xico".
+    """
+    decomposed = unicodedata.normalize("NFKD", value.strip().lower())
+    ascii_only = decomposed.encode("ascii", "ignore").decode("ascii")
+    slug = re.sub(r"[^a-z0-9]+", "-", ascii_only).strip("-")
     return slug or "cliente"
 
 

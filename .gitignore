@@ -1,0 +1,85 @@
+# ---------------------------------------------------------------------------
+# Secretos / configuracion local  (NUNCA se suben)
+# ---------------------------------------------------------------------------
+.env
+.env.*
+*.env
+!.env.example
+!.env.*.example
+
+# Credenciales y llaves
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
+secrets.json
+service-account*.json
+
+# ---------------------------------------------------------------------------
+# Dependencias / entornos virtuales de Python
+# ---------------------------------------------------------------------------
+.venv/
+venv/
+env/
+ENV/
+.virtualenv/
+pip-wheel-metadata/
+site-packages/
+
+# Bytecode y cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Build / distribucion
+build/
+dist/
+*.egg-info/
+.eggs/
+wheels/
+
+# Herramientas y cache de tests
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+
+# ---------------------------------------------------------------------------
+# Dependencias de Node (por si se agrega front/tooling)
+# ---------------------------------------------------------------------------
+node_modules/
+npm-debug.log*
+yarn-error.log*
+pnpm-lock.yaml.bak
+
+# ---------------------------------------------------------------------------
+# Salidas generadas por la app (reportes, datos crudos)
+# ---------------------------------------------------------------------------
+fcs-reports/output/raw/
+fcs-reports/output/reports/*
+!fcs-reports/output/reports/.gitkeep
+*.log
+logs/
+
+# ---------------------------------------------------------------------------
+# Editores / SO
+# ---------------------------------------------------------------------------
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---------------------------------------------------------------------------
+# Claude Code (ajustes locales del desarrollador)
+# ---------------------------------------------------------------------------
+.claude/settings.local.json
