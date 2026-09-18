@@ -1,0 +1,9 @@
+# CloudSecurityDetections / CloudSecurityAssets requieren FalconPy >= 1.6.x
+crowdstrike-falconpy>=1.6.5,<2.0.0
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.30,<1.0
+jinja2>=3.1,<4.0
+python-dotenv>=1.0,<2.0
+
+# Opcional: solo si se habilitan exports CSV/XLSX desde los processors.
+# pandas>=2.2,<3.0
