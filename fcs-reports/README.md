@@ -67,7 +67,7 @@ sistema y apunta `PIP_CERT` / `REQUESTS_CA_BUNDLE` / `SSL_CERT_FILE` ahí.
 ```bash
 docker build -t fcs-reports .
 
-# lote (una vez, o desde cron)
+# lote (una vez, o desde cron) -- volumen nombrado, aislado por cliente
 docker run --rm --env-file .env.cliente-a -v fcs_out_a:/app/output \
   fcs-reports python -m src.generate
 
@@ -78,6 +78,16 @@ docker run -d --env-file .env.cliente-a -v fcs_out_a:/app/output -p 8080:8000 \
 
 Un volumen por cliente mantiene aislados los históricos. La misma imagen sirve a
 todos: solo cambia el `--env-file`.
+
+En Windows/PowerShell, para ver el HTML directo en el disco sin sacarlo de un
+volumen, un bind mount a `output/` es más práctico que un volumen nombrado:
+
+```powershell
+docker run --rm --env-file .env.test -v "${PWD}\output:/app/output" `
+  fcs-reports python -m src.generate
+```
+
+El reporte queda en `fcs-reports\output\reports\` y se abre con doble clic.
 
 ## Arquitectura
 
@@ -212,10 +222,9 @@ La validación solo mira cláusulas `severity:`; el resto del FQL pasa intacto
 }
 ```
 
-`FIELD_PATHS` en `processors/cloud_risks.py` ya apunta a estas rutas, con
-respaldos por si el endpoint cambia de forma. No existe campo `service`; en su
-lugar la tabla muestra `region` y `account_id`. El array `compliance` servirá
-para el dashboard de Cloud Compliance.
+No existe campo `service`; en su lugar la tabla muestra `region` y
+`account_id`. El array `compliance` servirá para el dashboard de Cloud
+Compliance.
 
 ## Verificación hecha
 
@@ -233,8 +242,22 @@ Con la API simulada (sin credenciales), en Python 3.14 + FalconPy 1.6.5:
 - `GET /reports` y `GET /reports/{archivo}`; traversal (`../`, `a/b.html`,
   `style.css`) rechazado con 400/404;
 - render en Chrome headless y revisión visual del resultado;
-- separación de la paleta verificada con el validador (all-pairs, sobre blanco).
+- separación de la paleta verificada con el validador (all-pairs, sobre blanco);
+- guard de `CLOUD_RISKS_FILTER`: rechaza mayúsculas y `'low'` inexistente,
+  acepta valores válidos, negaciones (`severity:!'informational'`) y FQL
+  combinado sin falsos positivos.
 
-Y **contra un tenant real, en Docker**: build detrás de la inspección TLS, login
-(`status=201`), 111 reglas leídas, reporte de 27 KB escrito en el volumen y
-revisado visualmente.
+Y **contra un tenant real, en Docker**, de punta a punta:
+
+- build detrás de la inspección TLS de la red (Netskope) instalando la CA
+  corporativa en el almacén del sistema;
+- login real (`status=201`) y lectura paginada del endpoint;
+- **el guard bloqueó en seco** un `.env` con `severity:['High','Critical','Medium','Low']`
+  (exit 2, mensaje exacto con el reemplazo) antes de gastar una sola llamada a
+  la API;
+- corregido el filtro a `severity:['high','critical','medium']`: **382
+  reglas, 1176 hallazgos** en los tres niveles (crítica/alta/media) con sus
+  colores correctos, dona de proveedor con AWS + OCI reapareciendo en cuanto
+  hay más de una nube;
+- reporte de ~30 KB escrito directo en el disco del host vía bind mount
+  (`-v "${PWD}\output:/app/output"`), abierto y revisado visualmente.
