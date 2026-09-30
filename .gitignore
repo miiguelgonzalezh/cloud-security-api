@@ -79,9 +79,7 @@ logs/
 Thumbs.db
 desktop.ini
 
-# ---------------------------------------------------------------------------
-# Claude Code (ajustes locales del desarrollador)
-# ---------------------------------------------------------------------------
+
 .claude/settings.local.json
 fcs-reports/.env.example
 fcs-reports/.dockerignore

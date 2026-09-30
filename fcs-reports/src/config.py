@@ -20,6 +20,13 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 VALID_CLOUDS = ("us-1", "us-2", "us-3", "eu-1", "us-gov-1", "us-gov-2")
 VALID_FREQUENCIES = ("daily", "weekly", "monthly")
 
+# Valores que el endpoint de Cloud Risks reconoce en severity. Ojo: el nivel
+# bajo se llama "informational", no "low", y todos van en minusculas.
+VALID_SEVERITIES = ("critical", "high", "medium", "informational")
+
+_SEVERITY_CLAUSE = re.compile(r"severity:\s*!?\s*(\[[^\]]*\]|'[^']*'|\"[^\"]*\")", re.IGNORECASE)
+_QUOTED_VALUE = re.compile(r"['\"]([^'\"]*)['\"]")
+
 DEFAULT_CHARTJS_URL = "https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"
 
 
@@ -92,6 +99,31 @@ def normalize_cloud(value: str) -> str:
             f"FALCON_CLOUD invalido: {value!r}. Valores permitidos: {', '.join(VALID_CLOUDS)}"
         )
     return candidate
+
+
+def validate_severity_filter(fql: str, variable: str = "CLOUD_RISKS_FILTER") -> None:
+    """Rechaza valores de severity que la API no reconoce.
+
+    Ante un valor desconocido el endpoint responde HTTP 200 con cero
+    resultados: no marca error, asi que un filtro mal escrito se ve exactamente
+    igual que "no hay hallazgos" y el cron entrega un reporte vacio cada semana
+    sin que nadie se entere. Es preferible no arrancar.
+    """
+    for clause in _SEVERITY_CLAUSE.finditer(fql or ""):
+        for token in _QUOTED_VALUE.findall(clause.group(1)):
+            if not token or token in VALID_SEVERITIES:
+                continue
+            lowered = token.lower()
+            if lowered in VALID_SEVERITIES:
+                raise ConfigError(
+                    f"{variable}: severity va en minusculas. Usa {lowered!r} en vez de {token!r}; "
+                    f"la API responde 200 con cero resultados ante {token!r}, sin marcar error."
+                )
+            extra = " El nivel bajo se llama 'informational', no 'low'." if lowered == "low" else ""
+            raise ConfigError(
+                f"{variable}: severity {token!r} no existe. Valores validos: "
+                f"{', '.join(VALID_SEVERITIES)}.{extra}"
+            )
 
 
 @dataclass(frozen=True)
@@ -174,6 +206,10 @@ def load_settings(env_file: Optional[Path] = None) -> Settings:
     if not output_dir.is_absolute():
         output_dir = PROJECT_ROOT / output_dir
 
+    # Los valores de severity del endpoint son minusculas: 'High' devuelve 0.
+    risks_filter = _env("CLOUD_RISKS_FILTER", "severity:['high','critical']") or ""
+    validate_severity_filter(risks_filter)
+
     return Settings(
         client_id=client_id,
         client_secret=client_secret,
@@ -192,7 +228,7 @@ def load_settings(env_file: Optional[Path] = None) -> Settings:
         backoff_cap=_env_float("BACKOFF_CAP", 30.0),
         ssl_verify=_env_bool("SSL_VERIFY", True),
         user_agent=_env("USER_AGENT", "fcs-reports/0.1.0") or "fcs-reports/0.1.0",
-        cloud_risks_filter=_env("CLOUD_RISKS_FILTER", "severity:['High','Critical']") or "",
+        cloud_risks_filter=risks_filter,
         cloud_risks_sort=_env("CLOUD_RISKS_SORT", "") or "",
         max_records_per_fetcher=max(0, _env_int("MAX_RECORDS_PER_FETCHER", 0)),
         chartjs_url=_env("CHARTJS_URL", DEFAULT_CHARTJS_URL) or DEFAULT_CHARTJS_URL,

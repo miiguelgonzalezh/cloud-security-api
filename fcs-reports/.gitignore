@@ -13,3 +13,6 @@ __pycache__/
 output/raw/
 output/reports/*
 !output/reports/.gitkeep
+
+# CA corporativas: especificas de cada red, se regeneran (ver certs/README.md)
+certs/*.crt

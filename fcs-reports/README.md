@@ -50,6 +50,20 @@ inválida · `3` fallo de autenticación. Útiles para que el cron alerte.
 
 ## Docker
 
+`docker run` **no construye la imagen**. Si aparece
+`pull access denied for fcs-reports`, falta el `docker build` de la primera
+línea.
+
+### Redes con inspección TLS
+
+Si `pip install` falla en el build con
+`CERTIFICATE_VERIFY_FAILED: self-signed certificate in certificate chain`, la
+red está interceptando TLS (aquí, Netskope). Coloca las CA corporativas en
+`certs/` y reconstruye — ver [certs/README.md](certs/README.md) para el
+one-liner que las extrae. El mismo problema aparecería en runtime al llamar a
+`api.crowdstrike.com`, así que el Dockerfile las instala en el almacén del
+sistema y apunta `PIP_CERT` / `REQUESTS_CA_BUNDLE` / `SSL_CERT_FILE` ahí.
+
 ```bash
 docker build -t fcs-reports .
 
@@ -148,20 +162,60 @@ por ejemplo semanal los lunes 06:00:
 
 Evita meter cron dentro de la imagen: complica logs, señales y el manejo de fallos.
 
-## Pendientes de validar contra un tenant real
+## Contrato real del endpoint (verificado contra tenant)
 
-Estos dos puntos no se pueden cerrar sin credenciales; ambos son de configuración,
-no de código:
+**`severity` va en minúsculas.** Medido en un tenant real con 525 reglas:
 
-1. **Mayúsculas de `severity` en el FQL.** El default es
-   `severity:['High','Critical']` (tal cual se especificó). Si la API devuelve
-   vacío, prueba minúsculas en `CLOUD_RISKS_FILTER`. El filtro es una variable de
-   entorno justamente para no tocar código.
-2. **Nombres reales de los campos del recurso.** `processors/cloud_risks.py` lee
-   cada campo con una lista de rutas candidatas (`rule_name` / `rule.name` /
-   `name`…) y, si no encuentra el conteo de misconfiguraciones, cuenta 1 por regla
-   **y lo anuncia en el reporte**. Corre `--dump-raw` una vez, revisa el JSON y
-   ajusta `FIELD_PATHS` con los nombres exactos.
+| Filtro | total |
+|---|---|
+| sin filtro | 525 |
+| `severity:'High'` | **0** |
+| `severity:'high'` | 101 |
+| `severity:['High','Critical']` | **0** |
+| `severity:['high','critical']` | 111 |
+
+La API responde `HTTP 200` con cero resultados ante un valor con mayúsculas — no
+da error, así que un filtro mal escrito se ve igual que "no hay hallazgos".
+
+Los únicos valores válidos son **`critical`, `high`, `medium`, `informational`**.
+Ojo: el nivel bajo se llama `informational`, **no `low`**; `'low'` no hace
+match con nada (`['high','critical','medium','low']` devuelve lo mismo que
+`['high','critical','medium']`).
+
+Como este error es silencioso — un cron entregaría un reporte vacío cada semana
+sin que nadie se entere — `config.py` valida los valores de `severity` dentro de
+`CLOUD_RISKS_FILTER` y **aborta al arrancar** (exit 2) con el reemplazo exacto:
+
+```
+CLOUD_RISKS_FILTER: severity va en minusculas. Usa 'high' en vez de 'High';
+la API responde 200 con cero resultados ante 'High', sin marcar error.
+```
+
+La validación solo mira cláusulas `severity:`; el resto del FQL pasa intacto
+(incluida la negación `severity:!'informational'`).
+
+**Forma del recurso** (`rule_id` y `rule_name` van anidados, no al nivel superior):
+
+```json
+{
+  "account_id": "651706770237",
+  "assessed_assets": 133,
+  "cid": "...",
+  "cloud_provider": "aws",
+  "compliance": [{"framework": "CIS", "name": "...", "type": "...", "version": "12.2",
+                  "benchmarks": [{"name": "CIS Controls v8", "version": "v8"}]}],
+  "misconfigurations": 2,
+  "region": "us-east-2",
+  "rule": {"rule_id": "...", "rule_name": "EC2 Security Group is overly permissive..."},
+  "severity": "medium",
+  "tags": {"Environment": "..."}
+}
+```
+
+`FIELD_PATHS` en `processors/cloud_risks.py` ya apunta a estas rutas, con
+respaldos por si el endpoint cambia de forma. No existe campo `service`; en su
+lugar la tabla muestra `region` y `account_id`. El array `compliance` servirá
+para el dashboard de Cloud Compliance.
 
 ## Verificación hecha
 
@@ -180,3 +234,7 @@ Con la API simulada (sin credenciales), en Python 3.14 + FalconPy 1.6.5:
   `style.css`) rechazado con 400/404;
 - render en Chrome headless y revisión visual del resultado;
 - separación de la paleta verificada con el validador (all-pairs, sobre blanco).
+
+Y **contra un tenant real, en Docker**: build detrás de la inspección TLS, login
+(`status=201`), 111 reglas leídas, reporte de 27 KB escrito en el volumen y
+revisado visualmente.

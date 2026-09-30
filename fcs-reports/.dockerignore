@@ -1,8 +1,15 @@
 .git
 .gitignore
+.dockerignore
+.claude/
 .env
+.env.*
+!.env.example
 output/
 __pycache__/
-*.pyc
+*.py[cod]
 .venv/
 .pytest_cache/
+README.md
+# certs/ se copia al almacen de confianza: que solo lleguen los .crt
+certs/README.md

@@ -53,10 +53,14 @@ PROVIDER_LABELS = {
     "alibaba": "Alibaba Cloud",
 }
 
-# Rutas candidatas por campo, en orden de preferencia.
+# Rutas candidatas por campo, en orden de preferencia. Las primeras de cada
+# tupla son las verificadas contra un tenant real; el resto son respaldos por
+# si el endpoint cambia de forma. Estructura observada del recurso:
+#   {account_id, assessed_assets, cid, cloud_provider, compliance[],
+#    misconfigurations, region, rule{rule_id, rule_name}, severity, tags{}}
 FIELD_PATHS = {
-    "rule_id": ("rule_id", "id", "rule.id", "policy_id"),
-    "rule_name": ("rule_name", "rule.name", "name", "policy_name", "title"),
+    "rule_id": ("rule.rule_id", "rule_id", "id"),
+    "rule_name": ("rule.rule_name", "rule_name", "name", "policy_name", "title"),
     "severity": ("severity", "rule.severity", "severity_name"),
     "misconfigurations": (
         "misconfigurations",
@@ -67,8 +71,9 @@ FIELD_PATHS = {
         "count",
     ),
     "assessed_assets": ("assessed_assets", "assessed_asset_count", "total_assets", "resource_count"),
-    "cloud_provider": ("cloud_provider", "cloud", "provider", "rule.cloud_provider"),
-    "service": ("service", "cloud_service", "service_category", "rule.service"),
+    "cloud_provider": ("cloud_provider", "cloud", "provider"),
+    "region": ("region", "cloud_region"),
+    "account_id": ("account_id", "account", "cloud_account_id"),
 }
 
 
@@ -175,7 +180,8 @@ def process(result: FetchResult) -> Dict[str, Any]:
                 "misconfigurations": _as_int(raw_count) if raw_count is not None else 1,
                 "assessed_assets": _as_int(_first(record, "assessed_assets")),
                 "provider": _normalize_provider(_first(record, "cloud_provider")),
-                "service": str(_first(record, "service") or ""),
+                "region": str(_first(record, "region") or "—"),
+                "account": str(_first(record, "account_id") or "—"),
             }
         )
 
@@ -196,9 +202,16 @@ def process(result: FetchResult) -> Dict[str, Any]:
         severity_counts[row["severity"]] = severity_counts.get(row["severity"], 0) + row["misconfigurations"]
         severity_rules[row["severity"]] = severity_rules.get(row["severity"], 0) + 1
 
-    severity_keys = [k for k in SEVERITY_ORDER if k in severity_counts]
-    if "unknown" in severity_counts:
+    # Solo niveles con hallazgos: un bucket en cero no se ve en la grafica pero
+    # si ocupa renglon en la leyenda y fila en la tabla.
+    severity_keys = [k for k in SEVERITY_ORDER if severity_counts.get(k)]
+    if severity_counts.get("unknown"):
         severity_keys.append("unknown")
+    if not severity_keys:
+        # Todo en cero: mejor mostrar los buckets vacios que una grafica muda.
+        severity_keys = [k for k in SEVERITY_ORDER if k in severity_counts]
+        if "unknown" in severity_counts:
+            severity_keys.append("unknown")
 
     severity_card = {
         "id": "cloud-risks-severity",
@@ -251,7 +264,8 @@ def process(result: FetchResult) -> Dict[str, Any]:
             {"key": "hallazgos", "label": "Hallazgos", "numeric": True},
             {"key": "activos_evaluados", "label": "Activos evaluados", "numeric": True},
             {"key": "proveedor", "label": "Proveedor"},
-            {"key": "servicio", "label": "Servicio"},
+            {"key": "region", "label": "Region"},
+            {"key": "cuenta", "label": "Cuenta"},
         ],
     }
     top_card["rows"] = [
@@ -261,7 +275,8 @@ def process(result: FetchResult) -> Dict[str, Any]:
             "hallazgos": r["misconfigurations"],
             "activos_evaluados": r["assessed_assets"],
             "proveedor": r["provider"],
-            "servicio": r["service"],
+            "region": r["region"],
+            "cuenta": r["account"],
         }
         for r in top_rows
     ]
@@ -271,7 +286,14 @@ def process(result: FetchResult) -> Dict[str, Any]:
     for row in rows:
         provider_counts[row["provider"]] = provider_counts.get(row["provider"], 0) + row["misconfigurations"]
 
-    ranked = sorted(provider_counts.items(), key=lambda kv: kv[1], reverse=True)
+    # Igual que en severidad: fuera los proveedores sin hallazgos.
+    ranked = sorted(
+        ((name, value) for name, value in provider_counts.items() if value > 0),
+        key=lambda kv: kv[1],
+        reverse=True,
+    )
+    if not ranked:
+        ranked = sorted(provider_counts.items(), key=lambda kv: kv[1], reverse=True)
     head = ranked[:TOP_PROVIDERS]
     tail_total = sum(value for _, value in ranked[TOP_PROVIDERS:])
 
@@ -315,7 +337,10 @@ def process(result: FetchResult) -> Dict[str, Any]:
         {
             "label": "Hallazgos abiertos",
             "value": total_findings,
-            "caption": f"en {total_rules} reglas evaluadas",
+            "caption": (
+                f"en {total_rules} reglas evaluadas"
+                + (f" · {provider_labels[0]}" if len(provider_labels) == 1 else "")
+            ),
         },
         {
             "label": "Severidad critica",
@@ -340,10 +365,16 @@ def process(result: FetchResult) -> Dict[str, Any]:
         "available": True,
         "error": None,
         "stats": stats,
-        # Orden intencional: las dos vistas de distribucion (media columna)
-        # quedan pareadas en la primera fila y el detalle Top N ocupa el ancho
-        # completo debajo.
-        "cards": [severity_card, provider_card, top_card],
+        # Orden intencional: las vistas de distribucion (media columna) quedan
+        # pareadas en la primera fila y el detalle Top N ocupa el ancho completo
+        # debajo. Con un solo proveedor la dona seria una rebanada al 100%: no
+        # dice nada que la tarjeta de totales no diga ya, asi que se omite (y
+        # reaparece sola en cuanto haya una segunda nube).
+        "cards": (
+            [severity_card, provider_card, top_card]
+            if len(provider_labels) > 1
+            else [severity_card, top_card]
+        ),
         "totals": {
             "rules": total_rules,
             "findings": total_findings,
